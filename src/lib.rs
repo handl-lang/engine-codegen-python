@@ -7,9 +7,42 @@
 //! marshal descriptors. This is a faithful C-ABI projection — the
 //! Handl port/adapter pair stays the ergonomic surface.
 
-use handl_plugin_sdkgen::{Emitter, Function, Record, SdkgenError, SdkgenModule};
+use handl_plugin_sdkgen::{
+    Emitter, Function, Record, SdkgenEmitterDef, SdkgenError, SdkgenModule, SdkgenRegistry,
+    SdkgenSpecInput, SdkgenTarget,
+};
 use std::collections::HashSet;
 use std::path::Path;
+
+mod spec;
+
+pub use spec::{generate_python, is_python_spec};
+
+/// Register the `python` sdkgen target on `reg` (ADR-0128 §0.1/§0.2):
+/// the `python` emitter plus the target record `(backend: "c", emitter:
+/// "python")`. The backend id resolves *by name* through the registry —
+/// `python/` depends on `c/`'s module at resolution time, never at the
+/// crate level. `.yaml`/`.yml`/`.json` inputs take the spec-driven path
+/// ([`generate_python`]) and bypass the backend entirely.
+pub fn register(reg: &mut SdkgenRegistry) {
+    reg.register_emitter(SdkgenEmitterDef {
+        name: "python",
+        make: |_| Ok(Box::new(PythonEmitter::new())),
+    });
+    reg.register_target(SdkgenTarget {
+        name: "python",
+        backend: "c",
+        emitter: "python",
+        source_filters: true,
+        // The ctypes projection does not layer external docs — unlike
+        // the `c`/`webidl` targets, no doc pass runs post-parse.
+        docs: None,
+        spec_input: Some(SdkgenSpecInput {
+            matches: is_python_spec,
+            run: |req| generate_python(req.spec, req.output),
+        }),
+    });
+}
 
 /// Emitter that writes Python `ctypes` bindings to disk.
 pub struct PythonEmitter;
