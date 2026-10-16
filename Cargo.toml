@@ -10,6 +10,6 @@ repository.workspace = true
 # ADR-0128 Phase 1: the sdkgen port stays in platform; this repo is the
 # python target. The workspace-root `[patch]` resolves the git dep from
 # the sibling `../platform` checkout for local development.
-handl-plugin-sdkgen = { git = "https://github.com/handl-lang/platform", rev = "c52b19a24e359387bfb743612521c9dae8260838" }
+handl-plugin-sdkgen = { git = "https://github.com/handl-lang/platform", branch = "main" }
 serde = { version = "1", features = ["derive"] }
 serde_yaml = "0.9"
