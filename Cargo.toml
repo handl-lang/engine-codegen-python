@@ -5,6 +5,9 @@ edition = "2024"
 description = "Python `ctypes` emitter for the Handl SDK generator (ADR-0107)."
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/handl-lang/sdkgen-python"
+readme = "README.md"
+keywords = ["handl", "sdkgen", "python", "bindings"]
+categories = ["development-tools"]
 
 [dependencies]
 # ADR-0128 Phase 1: the sdkgen port stays in platform; this repo is the
