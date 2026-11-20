@@ -1,7 +1,7 @@
-# sdkgen-python
+# tool-sdkgen-python
 
 `handl-plugin-sdkgen-emitter-python` — Python `ctypes` emitter for the
-Handl SDK generator. Part of the `sdkgen-*` family: emits Python SDK
+Handl SDK generator. Part of the `tool-sdkgen-*` family: emits Python SDK
 bindings from SDK specs.
 
 ## Development
