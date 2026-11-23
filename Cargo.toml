@@ -1,20 +1,22 @@
 [package]
-name = "handl-plugin-sdkgen-emitter-python"
+name = "handl-plugin-codegen-emitter-python"
 version = "0.1.0"
 edition = "2024"
-description = "Python `ctypes` emitter for the Handl SDK generator (ADR-0107)."
+description = "Python `ctypes` emitter and spec-driven `.hnl` shim for the Handl codegen pipeline (ADR-0107, PL-004)."
 license = "MIT"
-repository = "https://github.com/handl-lang/engine-sdkgen-python"
+repository = "https://github.com/handl-lang/engine-codegen-python"
 readme = "README.md"
-keywords = ["handl", "sdkgen", "python", "bindings"]
+keywords = ["handl", "codegen", "python", "bindings"]
 categories = ["development-tools"]
 
 [dependencies]
-# ADR-0128 Phase 1: the sdkgen port stays in platform; this repo is the
-# python target. The workspace-root `[patch]` resolves the git dep from
-# the sibling `../host` checkout for local development.
-handl-plugin-sdkgen = { git = "https://github.com/handl-lang/host", branch = "main" }
+# PL-004 T-075: the codegen port lives in `handl-plugin-codegen`
+# (host@7707dbb1+, local-only until pushed); the `[patch]` below
+# resolves it from the sibling `../host` checkout. Kernel traits
+# (`Source`/`Emitter`/`Change`) are re-exported by that crate.
+handl-plugin-codegen = { git = "https://github.com/handl-lang/host", branch = "main" }
 serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 serde_yaml = "0.9"
 
 [patch."https://github.com/handl-lang/engine"]
@@ -25,5 +27,6 @@ handl-calculus = { path = "../kernel/crates/handl-calculus" }
 handl-language = { path = "../kernel/crates/handl-language" }
 handl-value = { path = "../kernel/crates/handl-value" }
 
+
 [patch."https://github.com/handl-lang/host"]
-handl-plugin-sdkgen = { path = "../host/crates/plugin-sdkgen" }
+handl-plugin-codegen = { path = "../host/crates/plugin-codegen" }

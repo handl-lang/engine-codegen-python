@@ -1,24 +1,30 @@
-# The `python` emitter — ctypes projection + spec input
+# The `python` targets — ctypes projection + spec input
 
-`handl-plugin-sdkgen-emitter-python` provides the `python` sdkgen
-target, which is two things:
+`handl-plugin-codegen-emitter-python` provides two codegen targets
+(PL-004):
 
-1. **The `python` emitter** — `SdkgenModule` (from backend `c`) → one
-   `<module>.py` of `ctypes` bindings. The target record is
-   `(backend: "c", emitter: "python")`: it resolves `c` *by name*
+1. **`python`** — `SdkgenModule` (from source `c`) → one `<module>.py`
+   of `ctypes` bindings. The target record is
+   `(source: "c", emitter: "python")`: it resolves `c` *by name*
    through the registry, so this repo never crate-depends on
-   `sdkgen-c`.
-2. **A spec input** — `.yaml`/`.yml`/`.json` inputs bypass the backend
-   pipeline entirely (`SdkgenSpecInput`) and emit an
-   embedded-CPython `.hnl` shim instead.
+   `codegen-c`.
+2. **`python-spec`** — `.yaml`/`.yml`/`.json` inputs ride the
+   `SpecModule` IR family (`Source<SpecModule>` = `SpecModule::load`,
+   `Emitter<SpecModule>` = the embedded-CPython `.hnl` renderer) and
+   emit `<package>/<package>.hnl`. The pre-PL-004 `spec_input` hook —
+   an IR-free bypass that wrote files directly — is gone; spec inputs
+   are a normal source/emitter pairing now. Because one target pairs
+   exactly one IR family, spec inputs take the `python-spec` target
+   name; input-kind routing on the `hnl codegen` command line is the
+   T-076 command layer's job.
 
 ```bash
 # ctypes projection of a C header:
 hnl sdkgen python /usr/include/time.h --output out/ [--target …] \
     [--include '…'] [--exclude '…'] [--config c.sdkgen.yaml]
 
-# spec-driven embedded-Python module:
-hnl sdkgen python mymod.yaml --output handl-packages/generated
+# spec-driven embedded-Python module (until T-076 routes by kind):
+hnl sdkgen python-spec mymod.yaml --output handl-packages/generated
 ```
 
 `--include`/`--exclude`/the C `.sdkgen.yaml` schema all pass through to
@@ -27,7 +33,7 @@ the ctypes projection doesn't layer external docs.
 
 ## The ctypes emitter
 
-`PythonEmitter::emit` writes `<output>/<module>.py`. `build_module`
+`PythonEmitter::materialize` returns one `Change::text` for `<module>.py` (applied under `--output` by the kernel `Engine`). `build_module`
 layout:
 
 ```python
@@ -78,8 +84,9 @@ Handl port/adapter pair remains that.
 
 ## The spec input (embedded-CPython shim)
 
-`is_python_spec` matches `.yaml`/`.yml`/`.json`; `generate_python`
-writes `<output>/<package>/<package>.hnl` — a module that embeds
+`is_python_spec` matches `.yaml`/`.yml`/`.json` (kept for command-layer
+pre-flight); the `python-spec` target's `PythonSpecSource` +
+`PythonSpecEmitter` produce `<output>/<package>/<package>.hnl` — a module that embeds
 CPython through `ffi.call` and returns output via an env var:
 
 ```yaml

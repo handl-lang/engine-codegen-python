@@ -1,19 +1,25 @@
-//! Spec-driven Python binding generation — the non-backend input path
-//! of the `python` sdkgen target (ADR-0128 §0.2).
+//! Spec-driven Python `.hnl` generation — the `SpecModule` IR path of
+//! the `python` codegen target (ADR-0128 §0.2, PL-004 T-075).
 //!
 //! A `.yaml`/`.yml`/`.json` spec describes an embedded-CPython shim: the
 //! generated `.hnl` module calls `Py_Initialize`/`PyRun_SimpleString`
-//! over `ffi.call` and returns each function's output through an env-var
-//! side channel. This is the *target's* spec path — it bypasses the
-//! C-backend pipeline entirely.
+//! over `ffi.call` and returns each function's output through an
+//! env-var side channel. This is the *target's* spec path — it bypasses
+//! the C-backend `SdkgenModule` pipeline and rides the
+//! [`SpecModule`](handl_plugin_codegen::SpecModule) IR family instead:
+//! `SpecModule::load` parses the document, [`PythonSpecEmitter`]
+//! renders the `<package>/<package>.hnl` artifact as a `Change`.
+//!
+//! Everything here is pure — no fs writes (PL-004 side-effect policy).
 
+use handl_plugin_codegen::CodegenError;
 use serde::Deserialize;
 use std::path::Path;
 
-/// Whether `path` is a spec input (rather than a C header) — the
-/// `python` target's [`SdkgenSpecInput::matches`] hook.
-///
-/// [`SdkgenSpecInput::matches`]: handl_plugin_sdkgen::SdkgenSpecInput::matches
+/// Whether `path` is a spec input (rather than a C header) — kept for
+/// callers that pre-flight the input kind (the command layer, T-076).
+/// The registry itself routes by target name now; the spec pairing is
+/// the `python-spec` target.
 pub fn is_python_spec(path: &Path) -> bool {
     matches!(
         path.extension().and_then(|e| e.to_str()),
@@ -54,7 +60,7 @@ struct PythonArg {
 }
 
 impl PythonSpec {
-    fn new() -> Self {
+    fn defaults() -> Self {
         Self {
             package: String::new(),
             doc: String::new(),
@@ -69,22 +75,21 @@ impl PythonSpec {
     }
 }
 
-fn load_python_spec(path: &Path) -> Result<PythonSpec, String> {
-    let s = std::fs::read_to_string(path)
-        .map_err(|e| format!("failed to read spec {}: {e}", path.display()))?;
-    let mut spec: PythonSpec = if path.extension().and_then(|e| e.to_str()) == Some("json") {
-        serde_yaml::from_str(&s).map_err(|e| format!("failed to parse JSON spec: {e}"))?
-    } else {
-        serde_yaml::from_str(&s).map_err(|e| format!("failed to parse YAML spec: {e}"))?
-    };
+/// Parse + validate a [`SpecModule`](handl_plugin_codegen::SpecModule)
+/// `document` into a [`PythonSpec`]. Pure.
+fn spec_from_document(document: &serde_json::Value) -> Result<PythonSpec, CodegenError> {
+    let mut spec: PythonSpec = serde_json::from_value(document.clone())
+        .map_err(|e| CodegenError::Parse(format!("invalid python spec document: {e}")))?;
     if spec.package.is_empty() {
-        return Err("spec is missing `package` name".to_string());
+        return Err(CodegenError::Parse(
+            "spec is missing `package` name".to_string(),
+        ));
     }
     if spec.functions.is_empty() {
-        return Err("spec has no `functions`".to_string());
+        return Err(CodegenError::Parse("spec has no `functions`".to_string()));
     }
     // Merge any defaults that were not explicitly supplied.
-    let defaults = PythonSpec::new();
+    let defaults = PythonSpec::defaults();
     if spec.library.is_empty() {
         spec.library = defaults.library;
     }
@@ -106,19 +111,15 @@ fn load_python_spec(path: &Path) -> Result<PythonSpec, String> {
     Ok(spec)
 }
 
-/// Generate the `<package>/<package>.hnl` module for a spec file.
-pub fn generate_python(spec_path: &Path, output: &Path) -> Result<(), String> {
-    let spec = load_python_spec(spec_path)?;
-    let pkg_dir = output.join(&spec.package);
-    std::fs::create_dir_all(&pkg_dir)
-        .map_err(|e| format!("failed to create output dir {}: {e}", pkg_dir.display()))?;
-
-    let hnl_path = pkg_dir.join(format!("{}.hnl", spec.package));
-    let hnl = build_python_hnl(&spec);
-    std::fs::write(&hnl_path, hnl)
-        .map_err(|e| format!("failed to write {}: {e}", hnl_path.display()))?;
-
-    Ok(())
+/// The `(artifact, content)` pair a spec document materializes to:
+/// `<package>/<package>.hnl`. Pure — the emitter wraps it in a
+/// `Change::text`.
+pub(crate) fn python_hnl_artifact(
+    document: &serde_json::Value,
+) -> Result<(String, String), CodegenError> {
+    let spec = spec_from_document(document)?;
+    let artifact = format!("{}/{}.hnl", spec.package, spec.package);
+    Ok((artifact, build_python_hnl(&spec)))
 }
 
 fn build_python_hnl(spec: &PythonSpec) -> String {

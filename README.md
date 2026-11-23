@@ -1,8 +1,9 @@
-# engine-sdkgen-python
+# engine-codegen-python
 
-`handl-plugin-sdkgen-emitter-python` — Python `ctypes` emitter for the
-Handl SDK generator. Part of the `engine-sdkgen-*` family: emits Python SDK
-bindings from SDK specs.
+`handl-plugin-codegen-emitter-python` — the `python` codegen target for
+the Handl codegen pipeline (PL-004): a `ctypes` emitter for C-header
+`SdkgenModule` IR plus a spec-driven `.hnl` shim over `SpecModule`.
+Part of the `engine-codegen-*` family.
 
 ## Development
 
@@ -16,9 +17,9 @@ test-runs as-is.
 
 ## Docs
 
-- [docs/index.md](docs/index.md) — the `python` target: the ctypes
-  emitter (`backend: "c"` → `<module>.py`) and the spec-driven
-  embedded-CPython `.hnl` input path.
+- [docs/index.md](docs/index.md) — the `python`/`python-spec`
+  targets: the ctypes emitter (`source: "c"` → `<module>.py`) and the
+  spec-driven embedded-CPython `.hnl` input path.
 - Framework: [`host/docs/sdkgen/`](https://github.com/handl-lang/host/blob/main/docs/sdkgen/index.md).
 
 ## License

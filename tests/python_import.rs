@@ -1,8 +1,9 @@
 //! End-to-end: emit ctypes bindings and import them with a real Python
 //! interpreter, exercising a live libc call.
 
-use handl_plugin_sdkgen::{Arg, Emitter, EnumConst, Field, Function, Record, SdkgenModule};
-use handl_plugin_sdkgen_emitter_python::PythonEmitter;
+use handl_plugin_codegen::{ApplyOptions, EmitContext, Emitter, Engine, FsStore, RunMeta};
+use handl_plugin_codegen::{Arg, EnumConst, Field, Function, Record, SdkgenModule};
+use handl_plugin_codegen_emitter_python::PythonEmitter;
 
 fn epoll_module() -> SdkgenModule {
     SdkgenModule {
@@ -86,6 +87,7 @@ fn epoll_module() -> SdkgenModule {
         imports: Vec::new(),
         source: None,
         per_record_files: false,
+        spec_dump: None,
         diagnostics: Vec::new(),
     }
 }
@@ -125,6 +127,21 @@ fn record_module() -> SdkgenModule {
     m
 }
 
+/// `materialize` + `Engine::apply` — the registry lifecycle path
+/// (PL-004); the generated `.py` lands in `dir` for the interpreter.
+fn emit(module: &SdkgenModule, dir: &std::path::Path) {
+    let changes = PythonEmitter::new()
+        .materialize(module, &EmitContext::new().with_output_dir(dir))
+        .expect("materialize");
+    let store = FsStore::new(dir);
+    let engine = Engine::new(&store);
+    let mut meta = RunMeta::new("test", "0.0.0");
+    meta.new_run_id();
+    engine
+        .apply(&changes, None, &meta, &ApplyOptions::default())
+        .expect("apply");
+}
+
 fn python3() -> Option<&'static str> {
     let ok = std::process::Command::new("python3")
         .arg("--version")
@@ -157,10 +174,10 @@ fn generated_module_imports_and_calls_libc() {
         eprintln!("python3 not available — skipping");
         return;
     }
-    let dir = std::env::temp_dir().join("sdkgen-py-e2e");
+    let dir = std::env::temp_dir().join("codegen-py-e2e");
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
-    PythonEmitter::new().emit(&epoll_module(), &dir).unwrap();
+    emit(&epoll_module(), &dir);
 
     // Import runs the layout asserts; the body then makes real libc calls.
     let stdout = run_python(
@@ -195,10 +212,10 @@ fn generated_record_layout_matches_python() {
         eprintln!("python3 not available — skipping");
         return;
     }
-    let dir = std::env::temp_dir().join("sdkgen-py-record");
+    let dir = std::env::temp_dir().join("codegen-py-record");
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
-    PythonEmitter::new().emit(&record_module(), &dir).unwrap();
+    emit(&record_module(), &dir);
 
     let stdout = run_python(
         &dir,

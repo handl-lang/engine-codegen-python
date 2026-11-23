@@ -1,50 +1,126 @@
-//! Python `ctypes` emitter for the Handl SDK generator (ADR-0107).
+//! Python `ctypes` emitter for the Handl codegen pipeline (ADR-0107,
+//! PL-004 T-075).
 //!
-//! Consumes the generic [`SdkgenModule`] IR and writes one
+//! Consumes the generic [`SdkgenModule`] IR and materializes one
 //! `<module>.py` per module: `ctypes.Structure` classes for records,
 //! aliases for typedefs, ints for enum/macro constants, and functions
 //! bound to the shared library with `argtypes`/`restype` set from the
 //! marshal descriptors. This is a faithful C-ABI projection — the
 //! Handl port/adapter pair stays the ergonomic surface.
+//!
+//! Two targets register here:
+//! - `python` — `Source "c"` (resolved by name) + [`PythonEmitter`]
+//!   over `SdkgenModule`, for C-header inputs.
+//! - `python-spec` — [`PythonSpecSource`] + [`PythonSpecEmitter`] over
+//!   [`SpecModule`], for `.yaml`/`.yml`/`.json` spec inputs (the
+//!   embedded-CPython shim path — PL-004 replaced the IR-free
+//!   `spec_input` bypass with a real source/emitter pairing).
 
-use handl_plugin_sdkgen::{
-    Emitter, Function, Record, SdkgenEmitterDef, SdkgenError, SdkgenModule, SdkgenRegistry,
-    SdkgenSpecInput, SdkgenTarget,
+use handl_plugin_codegen::{
+    Change, CodegenEmitterDef, CodegenError, CodegenRegistry, CodegenRequest, CodegenSourceDef,
+    CodegenTarget, Emitter, Function, Record, SdkgenModule, Source, SpecModule, erase_emitter,
+    erase_source,
 };
 use std::collections::HashSet;
-use std::path::Path;
 
 mod spec;
 
-pub use spec::{generate_python, is_python_spec};
+pub use spec::is_python_spec;
 
-/// Register the `python` sdkgen target on `reg` (ADR-0128 §0.1/§0.2):
-/// the `python` emitter plus the target record `(backend: "c", emitter:
-/// "python")`. The backend id resolves *by name* through the registry —
-/// `python/` depends on `c/`'s module at resolution time, never at the
-/// crate level. `.yaml`/`.yml`/`.json` inputs take the spec-driven path
-/// ([`generate_python`]) and bypass the backend entirely.
-pub fn register(reg: &mut SdkgenRegistry) {
-    reg.register_emitter(SdkgenEmitterDef {
+/// Register the `python` codegen targets on `reg` (ADR-0128 §0.1/§0.2,
+/// PL-004):
+///
+/// - `python` — source `"c"` + emitter `"python"` (the `SdkgenModule`
+///   ctypes projection; `source_filters` keeps `--include`/`--exclude`).
+///   The source id resolves *by name* through the registry — `python/`
+///   depends on `c/`'s module at resolution time, never at the crate
+///   level.
+/// - `python-spec` — the spec-driven `.hnl` shim path over `SpecModule`.
+///   It is a separate target because one target pairs exactly one IR
+///   family; input-kind routing (`python` vs `python-spec` for a yaml
+///   spec) is the command layer's job (T-076).
+pub fn register(reg: &mut CodegenRegistry) {
+    reg.register_emitter(CodegenEmitterDef {
         name: "python",
-        make: |_| Ok(Box::new(PythonEmitter::new())),
+        make: make_python_emitter,
     });
-    reg.register_target(SdkgenTarget {
+    reg.register_source(CodegenSourceDef {
+        name: "python-spec",
+        make: make_spec_source,
+    });
+    reg.register_emitter(CodegenEmitterDef {
+        name: "python-spec",
+        make: make_spec_emitter,
+    });
+    reg.register_target(CodegenTarget {
         name: "python",
-        backend: "c",
+        source: "c",
         emitter: "python",
         source_filters: true,
         // The ctypes projection does not layer external docs — unlike
         // the `c`/`webidl` targets, no doc pass runs post-parse.
         docs: None,
-        spec_input: Some(SdkgenSpecInput {
-            matches: is_python_spec,
-            run: |req| generate_python(req.spec, req.output),
-        }),
+        spec_input: None,
+    });
+    reg.register_target(CodegenTarget {
+        name: "python-spec",
+        source: "python-spec",
+        emitter: "python-spec",
+        source_filters: false,
+        docs: None,
+        spec_input: None,
     });
 }
 
-/// Emitter that writes Python `ctypes` bindings to disk.
+fn make_python_emitter(
+    _req: &CodegenRequest<'_>,
+) -> Result<Box<dyn handl_plugin_codegen::AnyEmitter>, String> {
+    Ok(erase_emitter(PythonEmitter::new()))
+}
+
+fn make_spec_source(
+    _req: &CodegenRequest<'_>,
+) -> Result<Box<dyn handl_plugin_codegen::AnySource>, String> {
+    Ok(erase_source(PythonSpecSource))
+}
+
+fn make_spec_emitter(
+    _req: &CodegenRequest<'_>,
+) -> Result<Box<dyn handl_plugin_codegen::AnyEmitter>, String> {
+    Ok(erase_emitter(PythonSpecEmitter))
+}
+
+/// `Source<SpecModule>` for the spec path — the yaml/json loader is
+/// [`SpecModule::load`], shared with every spec-family target.
+pub struct PythonSpecSource;
+
+impl Source<SpecModule> for PythonSpecSource {
+    fn parse(&self, req: &handl_plugin_codegen::EmitContext) -> Result<SpecModule, CodegenError> {
+        SpecModule::load(
+            req.spec_path.as_deref().ok_or_else(|| {
+                CodegenError::Parse("python-spec source requires EmitContext::spec_path".into())
+            })?,
+            req.source_url.clone(),
+        )
+    }
+}
+
+/// `Emitter<SpecModule>` rendering the `<package>/<package>.hnl`
+/// embedded-CPython shim — pure `materialize`, `Change`-only output.
+pub struct PythonSpecEmitter;
+
+impl Emitter<SpecModule> for PythonSpecEmitter {
+    fn materialize(
+        &self,
+        module: &SpecModule,
+        _req: &handl_plugin_codegen::EmitContext,
+    ) -> Result<Vec<Change>, CodegenError> {
+        let (artifact, content) = spec::python_hnl_artifact(&module.document)?;
+        Ok(vec![Change::text(artifact, content)])
+    }
+}
+
+/// Emitter that materializes Python `ctypes` bindings as `Change`s.
 pub struct PythonEmitter;
 
 impl PythonEmitter {
@@ -59,19 +135,22 @@ impl Default for PythonEmitter {
     }
 }
 
-impl Emitter for PythonEmitter {
-    fn emit(&self, module: &SdkgenModule, output: &Path) -> Result<(), SdkgenError> {
-        std::fs::create_dir_all(output)
-            .map_err(|e| SdkgenError(format!("failed to create output dir: {e}")))?;
+impl Emitter<SdkgenModule> for PythonEmitter {
+    /// One `<module>.py` artifact — no fs writes (PL-004).
+    fn materialize(
+        &self,
+        module: &SdkgenModule,
+        _req: &handl_plugin_codegen::EmitContext,
+    ) -> Result<Vec<Change>, CodegenError> {
         let name = if module.module.is_empty() {
             "module"
         } else {
             &module.module
         };
-        let path = output.join(format!("{name}.py"));
-        std::fs::write(&path, build_module(module))
-            .map_err(|e| SdkgenError(format!("failed to write {}: {e}", path.display())))?;
-        Ok(())
+        Ok(vec![Change::text(
+            format!("{name}.py"),
+            build_module(module),
+        )])
     }
 }
 
@@ -205,10 +284,10 @@ struct FieldSpec {
 /// `out_struct:{…}`, `io_struct:{…}`), if `desc` is one.
 fn inline_struct_spec(desc: &str) -> Option<&str> {
     for prefix in ["in_struct:", "out_struct:", "io_struct:"] {
-        if let Some(rest) = desc.strip_prefix(prefix) {
-            if let Some(inner) = rest.strip_prefix('{') {
-                return inner.strip_suffix('}');
-            }
+        if let Some(rest) = desc.strip_prefix(prefix)
+            && let Some(inner) = rest.strip_prefix('{')
+        {
+            return inner.strip_suffix('}');
         }
     }
     None
@@ -329,13 +408,13 @@ fn emit_struct_class(
         ));
         cursor += desc_size(&f.kind, f.width);
     }
-    if let Some(total) = total_size {
-        if total > cursor {
-            out.push_str(&format!(
-                "        (\"_pad_tail\", ctypes.c_ubyte * {}),\n",
-                total - cursor
-            ));
-        }
+    if let Some(total) = total_size
+        && total > cursor
+    {
+        out.push_str(&format!(
+            "        (\"_pad_tail\", ctypes.c_ubyte * {}),\n",
+            total - cursor
+        ));
     }
     out.push_str("    ]\n");
     for f in fields {
@@ -503,22 +582,22 @@ fn field_ctypes_type(
     field: &str,
     records: &HashSet<&str>,
 ) -> (String, Vec<(String, Vec<(String, String)>)>) {
-    if let Some(spec) = desc.strip_prefix("rec:") {
-        if spec.starts_with('{') {
-            let inner = spec.trim_start_matches('{').trim_end_matches('}');
-            let fields = inner
-                .split(',')
-                .filter(|s| !s.trim().is_empty())
-                .filter_map(|s| {
-                    let mut parts = s.splitn(2, ':');
-                    let name = parts.next()?.trim().to_string();
-                    let kind = parts.next()?.split('@').next()?.trim().to_string();
-                    Some((name, ctypes_type(&kind, records)))
-                })
-                .collect();
-            let name = format!("_{parent}_{field}");
-            return (name.clone(), vec![(name, fields)]);
-        }
+    if let Some(spec) = desc.strip_prefix("rec:")
+        && spec.starts_with('{')
+    {
+        let inner = spec.trim_start_matches('{').trim_end_matches('}');
+        let fields = inner
+            .split(',')
+            .filter(|s| !s.trim().is_empty())
+            .filter_map(|s| {
+                let mut parts = s.splitn(2, ':');
+                let name = parts.next()?.trim().to_string();
+                let kind = parts.next()?.split('@').next()?.trim().to_string();
+                Some((name, ctypes_type(&kind, records)))
+            })
+            .collect();
+        let name = format!("_{parent}_{field}");
+        return (name.clone(), vec![(name, fields)]);
     }
     (ctypes_type(desc, records), Vec::new())
 }
@@ -526,7 +605,7 @@ fn field_ctypes_type(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use handl_plugin_sdkgen::{Arg, EnumConst, Field, Typedef};
+    use handl_plugin_codegen::{Arg, EnumConst, Field, Typedef};
 
     fn module() -> SdkgenModule {
         SdkgenModule {
