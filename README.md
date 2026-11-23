@@ -1,9 +1,9 @@
-# engine-codegen-python
+# tool-codegen-python
 
 `handl-plugin-codegen-emitter-python` — the `python` codegen target for
 the Handl codegen pipeline (PL-004): a `ctypes` emitter for C-header
 `SdkgenModule` IR plus a spec-driven `.hnl` shim over `SpecModule`.
-Part of the `engine-codegen-*` family.
+Part of the `tool-codegen-*` family.
 
 ## Development
 
