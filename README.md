@@ -20,7 +20,7 @@ test-runs as-is.
 - [docs/index.md](docs/index.md) — the `python`/`python-spec`
   targets: the ctypes emitter (`source: "c"` → `<module>.py`) and the
   spec-driven embedded-CPython `.hnl` input path.
-- Framework: [`host/docs/sdkgen/`](https://github.com/handl-lang/host/blob/main/docs/sdkgen/index.md).
+- Framework: [`host/docs/codegen/`](https://github.com/handl-lang/host/blob/main/docs/codegen/index.md).
 
 ## License
 
