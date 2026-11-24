@@ -21,8 +21,9 @@
 //!   (inspect/typing must run inside Python), parse its JSON into the
 //!   spec document, and emit `<module>/<module>.hnl` — `ffi.call` into
 //!   libpython with a JSON env-var value channel. v1 covers
-//!   module-level functions with scalar/`List(T)` signatures; every
-//!   skipped symbol is reported, never dropped.
+//!   module-level functions with scalar/`List(T)` signatures, emitted
+//!   as typed curried arrows; every skipped symbol is reported, never
+//!   dropped.
 
 use handl_plugin_codegen::{
     Change, CodegenEmitterDef, CodegenError, CodegenRegistry, CodegenRequest, CodegenSourceDef,

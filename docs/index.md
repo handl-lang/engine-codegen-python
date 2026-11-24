@@ -118,11 +118,12 @@ are `export`ed. The spec path produces `.hnl` directly — no
 
 `python-import` is the *import* direction the spec path never had:
 it reads a Python module/package and emits a `.hnl` surface over
-embedded CPython. v1 exports are **untyped** (`export f := (a, b) ~>
-do { … }`): the intended signature stays in a `-- f(a: Int, b: Int) ->
-Int` comment — `~[n]~>` signatures describe the extern-call convention
-(array-of-args), not defined arrows, so typed exports need the
-curried `T ~> T ~> R` form (follow-up). The spec argument is a `*.py` file, a package
+embedded CPython. v1 exports are **typed curried arrows** —
+`export add : Int ~> Int ~> Int := a ~> b ~> do { … }`, applied as
+`add(a)(b)` — the form `hnl typecheck` verifies against the body (the
+`parse(…)` tail is `Value`, which unifies with any declared return).
+The intended signature is also kept in a `-- f(a: Int, b: Int) -> Int`
+comment. The spec argument is a `*.py` file, a package
 directory (with `__init__.py`), or a dotted module name; the source
 probes `python3 -c scripts/hnl-introspect.py <target>` (the vendored,
 stdlib-only introspector — `inspect`/`typing` must run inside Python,
@@ -160,7 +161,8 @@ as required params with a note (hnl signatures have no defaults).
 
 Known channel limits (from the spike + the first live smoke test):
 
-- `Py_Initialize` runs per call, exceptions surface as
-  `PyRun_SimpleString` failure rather than a structured error, and
-  `json.parse` returns `Value` — declared types live in `--` comments,
-  not the typechecker.
+- `Py_Initialize` runs per call and exceptions surface as
+  `PyRun_SimpleString` failure rather than a structured error. The
+  declared signature types are checked by `hnl typecheck`, but the
+  runtime value crossing the JSON channel is untyped `Value` — a
+  Python function that returns the wrong JSON shape is not caught.

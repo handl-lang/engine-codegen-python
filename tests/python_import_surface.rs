@@ -94,6 +94,24 @@ fn fixture_json() -> serde_json::Value {
                 "ret": "int"
             },
             {
+                "name": "kw_only", "py_name": "kw_only", "doc": "",
+                "skip": null,
+                "params": [
+                    {"name": "type", "ann": "int", "kind": "positional", "has_default": false},
+                    {"name": "data", "ann": "string", "kind": "positional", "has_default": true}
+                ],
+                "ret": "string"
+            },
+            {
+                "name": "collide", "py_name": "collide", "doc": "",
+                "skip": null,
+                "params": [
+                    {"name": "type", "ann": "int", "kind": "positional", "has_default": false},
+                    {"name": "type_", "ann": "int", "kind": "positional", "has_default": false}
+                ],
+                "ret": "int"
+            },
+            {
                 "name": "Greeter", "py_name": "Greeter", "doc": "",
                 "skip": "class surface — v1 covers module-level functions only",
                 "params": [], "ret": "unannotated"
@@ -153,7 +171,7 @@ fn surface_classifies_supported_and_skipped() {
     assert_eq!(surface.module, "toy_surface");
     assert_eq!(surface.libpython, "libpython3.14.so");
     assert_eq!(surface.path_entries, vec!["/abs/tests/fixtures"]);
-    assert_eq!(surface.functions.len(), 10);
+    assert_eq!(surface.functions.len(), 12);
 
     let by_name = |n: &str| surface.functions.iter().find(|f| f.name == n).unwrap();
 
@@ -162,6 +180,25 @@ fn surface_classifies_supported_and_skipped() {
     assert_eq!(add.ret, "Int");
     assert_eq!(add.params.len(), 2);
     assert_eq!(add.params[0].hnl, "Int");
+
+    // hnl keywords get a `_` suffix on the binder; defaults stay notes.
+    let kw = by_name("kw_only");
+    assert!(kw.skip.is_none());
+    assert_eq!(kw.params[0].name, "type_");
+    assert_eq!(kw.params[1].name, "data_");
+    assert!(kw.notes.iter().any(|n| n.contains("default")));
+
+    // `type` and `type_` collapse onto one binder → loud whole-skip.
+    let collide = by_name("collide");
+    assert!(
+        collide
+            .skip
+            .as_deref()
+            .unwrap_or("")
+            .contains("collide on hnl name"),
+        "collide skip: {:?}",
+        collide.skip
+    );
 
     let greet = by_name("greet");
     assert!(greet.skip.is_none());
@@ -206,18 +243,29 @@ fn hnl_output_has_exports_and_loud_skips() {
     let surface = surface_from_document(&fixture_json()).unwrap();
     let hnl = build_hnl(&surface);
 
-    // Supported functions export with typed signatures.
-    assert!(hnl.contains("export add := (a, b) ~> do {"));
-    assert!(hnl.contains("export scale := (xs, factor) ~> do {"));
-    assert!(hnl.contains("export greet := (name, punct) ~> do {"));
+    // Supported functions export as typed curried arrows.
+    assert!(hnl.contains("export add : Int ~> Int ~> Int := a ~> b ~> do {"));
+    assert!(
+        hnl.contains(
+            "export scale : List(Number) ~> Number ~> List(Number) := xs ~> factor ~> do {"
+        )
+    );
+    assert!(hnl.contains("export greet : String ~> String ~> String := name ~> punct ~> do {"));
+    // Keyword params bind under their escaped names.
+    assert!(hnl.contains("export kw_only : Int ~> String ~> String := type_ ~> data_ ~> do {"));
+    assert!(hnl.contains("_py_args := json.stringify([type_, data_])"));
 
-    // ffi plumbing + JSON channel.
+    // ffi plumbing + JSON channel — `* as` imports: a bare `parse`
+    // binding loses to the language `parse` prim at eval time.
     assert!(hnl.contains("from \"ffi\" import { call }"));
-    assert!(hnl.contains("from \"json\" import { stringify, parse }"));
+    assert!(hnl.contains("from \"json\" import * as json"));
+    assert!(hnl.contains("from \"str\" import * as str"));
+    assert!(hnl.contains("json.parse(get_env(\"HNL_PY_OUT\"))"));
+    assert!(hnl.contains("str.concat(str.concat("));
     assert!(hnl.contains("PYLIB := \"libpython3.14.so\""));
     assert!(hnl.contains("PyRun_SimpleString"));
     assert!(hnl.contains("json.loads(r"));
-    assert!(hnl.contains("_py_args := stringify([a, b])"));
+    assert!(hnl.contains("_py_args := json.stringify([a, b])"));
     assert!(hnl.contains("HNL_PY_OUT"));
     assert!(hnl.contains("importlib.util.spec_from_file_location('toy_surface'"));
     assert!(hnl.contains("sys.path.insert(0, _p)"));
@@ -229,6 +277,7 @@ fn hnl_output_has_exports_and_loud_skips() {
         "describe",
         "lookup",
         "unannotated",
+        "collide",
         "Greeter",
         "fetch_later",
     ] {
@@ -270,7 +319,7 @@ fn emitter_materializes_one_change() {
         &handl_plugin_codegen::ArtifactRef::new("toy_surface/toy_surface.hnl")
     );
     let text = String::from_utf8_lossy(content);
-    assert!(text.contains("export add := (a, b) ~> do {"));
+    assert!(text.contains("export add : Int ~> Int ~> Int := a ~> b ~> do {"));
 }
 
 // ---------------------------------------------------------------
@@ -330,19 +379,70 @@ fn source_and_emitter_end_to_end() {
 
     // The real introspection must agree with the fixture JSON: the
     // supported set exports, everything else is a SKIPPED comment.
-    assert!(text.contains("export add := (a, b) ~> do {"));
-    assert!(text.contains("export scale := (xs, factor) ~> do {"));
+    assert!(text.contains("export add : Int ~> Int ~> Int := a ~> b ~> do {"));
+    assert!(
+        text.contains(
+            "export scale : List(Number) ~> Number ~> List(Number) := xs ~> factor ~> do {"
+        )
+    );
     for name in [
         "total",
         "apply_all",
         "describe",
         "lookup",
         "unannotated",
+        "collide",
         "Greeter",
         "fetch_later",
     ] {
         assert!(text.contains(&format!("-- {name}: SKIPPED")), "{name}");
     }
+}
+
+/// `hnl typecheck` on the emitted artifact — the typed-curried exports
+/// only earn their keep if the host checker accepts them. Skips
+/// cleanly when no `hnl` binary is on PATH (same pattern as the
+/// python3-gated e2e above).
+#[test]
+fn generated_surface_typechecks_with_hnl() {
+    let hnl_ok = std::process::Command::new("hnl")
+        .arg("version")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    if !hnl_ok {
+        eprintln!("hnl not available — skipping typecheck");
+        return;
+    }
+
+    // Build the surface through the real source→emitter path so the
+    // artifact under test is exactly what `hnl codegen python-import`
+    // writes.
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/toy_surface.py");
+    let ctx = EmitContext::new().with_spec_path(&fixture);
+    let module = PythonImportSource.parse(&ctx).expect("introspect fixture");
+    let changes = PythonImportEmitter
+        .materialize(&module, &ctx)
+        .expect("materialize");
+    let Change::Put { content, .. } = &changes[0] else {
+        panic!("expected Put")
+    };
+
+    let dir = std::env::temp_dir().join("codegen-py-import-hnl");
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("toy_surface.hnl");
+    std::fs::write(&file, content).unwrap();
+    let out = std::process::Command::new("hnl")
+        .arg("typecheck")
+        .arg(&file)
+        .output()
+        .expect("run hnl typecheck");
+    assert!(
+        out.status.success(),
+        "hnl typecheck failed\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
 }
 
 #[test]

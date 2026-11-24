@@ -5,3 +5,7 @@ project/
 xtask/target/
 /Cargo.lock
 /.cargo/
+
+# python bytecode caches (introspection runs)
+__pycache__/
+*.pyc

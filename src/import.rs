@@ -13,10 +13,10 @@
 //!   registry) *and* as a `-- <name>: SKIPPED` comment in the artifact.
 //! - [`PythonImportEmitter`] (`Emitter<SpecModule>`) renders
 //!   `<module>/<module>.hnl`: `ffi.call` into `libpython`
-//!   (`Py_Initialize`/`PyRun_SimpleString`) with args/results crossing
-//!   as JSON through the `HNL_PY_IN`/`HNL_PY_OUT` env vars — the spike
-//!   (`/tmp/hnl-pygen`) proved this shape; this module is the honest,
-//!   policy-checked version of it.
+//!   (`Py_Initialize`/`PyRun_SimpleString`) with args embedded in the
+//!   `py_run` source as a JSON literal and the result returning through
+//!   the `HNL_PY_OUT` env var — the spike (`/tmp/hnl-pygen`) proved
+//!   this shape; this module is the honest, policy-checked version.
 //!
 //! v1 scope: module-level functions whose params/return map to
 //! `Int`/`Number`/`String`/`Bool`/`List(T)` (scalar `None` returns
@@ -25,6 +25,11 @@
 //! annotations, `dict`/`tuple`/`set`/unions/`Optional`, unannotated
 //! params — skips the *whole function* with a loud reason. Nothing is
 //! silently widened to `Any`.
+//!
+//! Supported exports are emitted as **typed curried arrows** —
+//! `export add : Int ~> Int ~> Int := a ~> b ~> do { … }` — the form
+//! `hnl typecheck` verifies against the body (`Value`-typed results
+//! like `json.parse` unify with any declared return).
 //!
 //! Everything here is pure except [`PythonImportSource::parse`], which
 //! runs the read-only introspection subprocess (PL-004: `parse` may
@@ -258,6 +263,8 @@ pub struct ImportFunction {
 /// A supported parameter.
 #[derive(Debug, Clone)]
 pub struct ImportParam {
+    /// hnl-safe binding name (`_` suffix when the Python name collides
+    /// with a keyword/literal or a name the generated body binds).
     pub name: String,
     /// hnl type spelling: `Int`, `Number`, `String`, `Bool`, `List(T)`.
     pub hnl: String,
@@ -400,12 +407,36 @@ fn classify_function(f: &serde_json::Value) -> Result<ImportFunction, CodegenErr
                     ));
                 }
                 params.push(ImportParam {
-                    name: pname.to_string(),
+                    name: safe_param(pname),
                     hnl,
                     has_default,
                 });
             }
             Err(why) => reasons.push(format!("param `{pname}`: {why}")),
+        }
+    }
+
+    // Two Python params can collapse onto one hnl binder (`type` and
+    // `type_`, or `null` → `null_` clashing with a literal `null_`) —
+    // refuse rather than emit a shadowing arrow.
+    {
+        let mut seen = std::collections::HashSet::new();
+        for p in &params {
+            if !seen.insert(p.name.as_str()) {
+                reasons.push(format!(
+                    "params collide on hnl name `{}` after keyword escaping",
+                    p.name
+                ));
+            }
+        }
+    }
+    // Unicode Python idents have no guaranteed hnl spelling — skip.
+    for p in &raw_params {
+        let pname = p.get("name").and_then(|n| n.as_str()).unwrap_or("?");
+        if !pname.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') || pname.is_empty() {
+            reasons.push(format!(
+                "param `{pname}` is not an ASCII identifier — cannot spell it in hnl"
+            ));
         }
     }
 
@@ -528,6 +559,41 @@ fn sanitize_ident(s: &str) -> String {
     }
 }
 
+/// Canonical Handl keywords/literals that cannot bind as arrow params
+/// (mirrors `tool-codegen-cli`'s `HANDL_KEYWORDS`, plus the `null`/
+/// `true`/`false` literals — `export f := (null) ~> …` fails to parse
+/// where `(type) ~>` happens to survive).
+const HNL_RESERVED: &[&str] = &[
+    "absurd", "app", "arr", "as", "axiom", "data", "do", "else", "export", "first", "for", "from",
+    "grade", "grades", "handle", "if", "id2", "impl", "import", "in", "infer", "law", "left",
+    "match", "op", "rec", "return", "rewrite", "right", "second", "sort", "then", "trait", "type",
+    "where", "while", "with", "null", "true", "false",
+];
+
+/// Names the generated export bodies bind themselves — a Python param
+/// spelled like one would shadow (or be shadowed by) the plumbing
+/// inside `do { … }`, so it gets the same `_` suffix as keywords.
+const GENERATED_FREE: &[&str] = &[
+    // `* as` module aliases the bodies reference — a param spelled
+    // like one would shadow the module inside `do { … }`.
+    "json",
+    // `str.concat` assembles the py_run source — `+` is numeric-only
+    // in hnl ("a" + "b" fails typecheck).
+    "str", "get_env", "py_init", "py_run", "_py_args",
+];
+
+/// Python param name → hnl-safe arrow binder. Python identifiers are
+/// already `[A-Za-z_][A-Za-z0-9_]*` (Unicode idents aside — those skip
+/// upstream as unmapped), so only keyword/literal/free-name collisions
+/// need rewriting. `_` itself binds fine as an arrow param.
+fn safe_param(name: &str) -> String {
+    if HNL_RESERVED.contains(&name) || GENERATED_FREE.contains(&name) {
+        format!("{name}_")
+    } else {
+        name.to_string()
+    }
+}
+
 /// The whole generated `.hnl` file. Pure.
 pub fn build_hnl(surface: &ImportSurface) -> String {
     let mut out = String::new();
@@ -546,11 +612,18 @@ pub fn build_hnl(surface: &ImportSurface) -> String {
     out.push_str("--- through HNL_PY_OUT (os.environ write = putenv = live).\n");
     out.push_str("--- Requires `json.stringify`/`json.parse` (lib-json).\n");
     out.push_str("--- v1: module-level functions, scalar + List(T) signatures;\n");
-    out.push_str("--- exports are untyped (intended types in `--` comments).\n");
+    out.push_str("--- exports are typed curried arrows (`T ~> T ~> R`), the form\n");
+    out.push_str("--- `hnl typecheck` verifies — the body's `json.parse(…)` tail is\n");
+    out.push_str("--- `Value`, which unifies with any declared return.\n");
     out.push_str("--- skipped symbols are annotated below, never silently dropped.\n\n");
 
+    // `* as` imports, not named — a bare `parse`/`stringify` binding
+    // loses to (or shadows) the language `parse` prim at eval time;
+    // `json.parse`/`json.stringify`/`str.concat` are the qualified ops
+    // every lib uses (lib-route, lib-http-router, lib-str-handl).
     out.push_str("from \"ffi\" import { call }\n");
-    out.push_str("from \"json\" import { stringify, parse }\n\n");
+    out.push_str("from \"json\" import * as json\n");
+    out.push_str("from \"str\" import * as str\n\n");
 
     out.push_str(&format!("PYLIB := \"{}\"\n", surface.libpython));
     out.push_str("LIBC := \"libc.so.6\"\n\n");
@@ -594,23 +667,39 @@ pub fn build_hnl(surface: &ImportSurface) -> String {
             .join(", ");
 
         out.push_str(&format!("-- {}({}) -> {}\n", f.py_name, py_sig, f.ret));
-        // v1 emits an untyped export: `~[n]~>` signatures describe the
-        // extern-call convention (array-of-args), not defined arrows —
-        // the intended types stay in the `-- name(params) -> ret` comment.
-        out.push_str(&format!("export {} := ({}) ~> do {{\n", f.name, arg_names));
+        // Typed curried export: `export f : T1 ~> … ~> R := a ~> … ~>
+        // do { … }` — the convention `hnl typecheck` checks (verified
+        // against lib-collections' `export windows<T> : … := (xs, n)
+        // ~> do` and host's smoke `export add : Number ~> Number ~>
+        // Number := a ~> b ~> a + b`). Curried application `f(a)(b)`
+        // is the call convention this imposes on consumers.
+        let mut signature = String::new();
+        for p in &f.params {
+            signature.push_str(&p.hnl);
+            signature.push_str(" ~> ");
+        }
+        signature.push_str(&f.ret);
+        let arrows: String = f.params.iter().map(|p| format!("{} ~> ", p.name)).collect();
+        out.push_str(&format!(
+            "export {} : {} := {}do {{\n",
+            f.name, signature, arrows
+        ));
         let (pre, post) = dispatcher_parts(surface, f);
         out.push_str("  _ := py_init(null)\n");
         if f.params.is_empty() {
             out.push_str("  _py_args := \"[]\"\n");
         } else {
-            out.push_str(&format!("  _py_args := stringify([{}])\n", arg_names));
+            out.push_str(&format!("  _py_args := json.stringify([{}])\n", arg_names));
         }
+        // `str.concat`, not `+` — hnl's `+` is numeric-only; string
+        // concat is the `str` kit op (verified: `"a" + "b"` fails
+        // typecheck, `str.concat("a","b")` checks and evaluates).
         out.push_str(&format!(
-            "  _ := py_run(\"{}\" + _py_args + \"{}\")\n",
+            "  _ := py_run(str.concat(str.concat(\"{}\", _py_args), \"{}\"))\n",
             escape_hnl_string(&pre),
             escape_hnl_string(&post)
         ));
-        out.push_str("  parse(get_env(\"HNL_PY_OUT\"))\n");
+        out.push_str("  json.parse(get_env(\"HNL_PY_OUT\"))\n");
         out.push_str("}\n\n");
     }
 

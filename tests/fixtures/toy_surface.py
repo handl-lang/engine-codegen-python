@@ -42,6 +42,14 @@ def unannotated(x) -> int:
     return x
 
 
+def kw_only(type: int, data: str = "x") -> str:
+    return f"{type}:{data}"
+
+
+def collide(type: int, type_: int) -> int:
+    return type + type_
+
+
 class Greeter:
     def hello(self, name: str) -> str:
         return f"hi, {name}"
