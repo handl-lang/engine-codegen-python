@@ -113,3 +113,43 @@ Each function emits `<name> := (args) ~> do { _ = py_init(); code :=
 are `export`ed. The spec path produces `.hnl` directly — no
 `SdkgenModule`, no emitter — which is why `.yaml` configs under
 `--config` and this input are distinct surfaces.
+
+## The `python-import` target (read direction)
+
+`python-import` is the *import* direction the spec path never had:
+it reads a Python module/package and emits a typed `.hnl` surface
+over embedded CPython. The spec argument is a `*.py` file, a package
+directory (with `__init__.py`), or a dotted module name; the source
+probes `python3 -c scripts/hnl-introspect.py <target>` (the vendored,
+stdlib-only introspector — `inspect`/`typing` must run inside Python,
+the same subprocess pattern `tool-codegen-cli` uses for `--help`) and
+parses its JSON into the `SpecModule` document. `HNL_PYTHON` (or the
+`python` config key) overrides the interpreter.
+
+```bash
+hnl codegen python-import /path/to/mymod.py --output out/
+hnl codegen python-import mypkg --output out/        # dotted name, cwd on sys.path
+```
+
+The emitter writes `<module>/<module>.hnl`: `ffi.call` into
+`libpython` (`Py_Initialize`/`PyRun_SimpleString`), args packed with
+`json.stringify` into `HNL_PY_IN`, the result read from `HNL_PY_OUT`
+through `json.parse`. The recorded `sys.path` entries (and the module's
+own file location, for loose `.py` inputs) are baked into the
+generated dispatcher so the import resolves the same way at runtime.
+
+**v1 scope** — module-level functions with `int`/`float`/`str`/`bool`
+params and returns plus `list[T]` (`List(T)`); `None` returns degrade
+to `Value`. Everything else skips the *whole function*, loudly:
+`Callable` params/returns, `*args`/`**kwargs`, classes, async
+definitions, C extensions/builtins without annotations, `dict`/
+`tuple`/`set`/union/`Optional`, and unannotated params each produce a
+`-- <name>: SKIPPED — <reason>` comment in the artifact *and* a
+`codegen: diagnostic:` line on stderr. Python-side defaults are kept
+as required params with a note (hnl signatures have no defaults).
+
+Known channel limits (from the spike, unchanged): env vars cap payload
+size and are process-global, `Py_Initialize` runs per call, exceptions
+surface as `PyRun_SimpleString` failure rather than a structured
+error, and `json.parse` returns `Value` — the declared signature types
+are the intended contract, not yet typechecker-enforced.

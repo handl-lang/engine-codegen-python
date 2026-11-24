@@ -8,13 +8,21 @@
 //! marshal descriptors. This is a faithful C-ABI projection — the
 //! Handl port/adapter pair stays the ergonomic surface.
 //!
-//! Two targets register here:
+//! Three targets register here:
 //! - `python` — `Source "c"` (resolved by name) + [`PythonEmitter`]
 //!   over `SdkgenModule`, for C-header inputs.
 //! - `python-spec` — [`PythonSpecSource`] + [`PythonSpecEmitter`] over
 //!   [`SpecModule`], for `.yaml`/`.yml`/`.json` spec inputs (the
 //!   embedded-CPython shim path — PL-004 replaced the IR-free
 //!   `spec_input` bypass with a real source/emitter pairing).
+//! - `python-import` — [`PythonImportSource`] +
+//!   [`PythonImportEmitter`] over [`SpecModule`], the *read*
+//!   direction: shell out to the vendored `scripts/hnl-introspect.py`
+//!   (inspect/typing must run inside Python), parse its JSON into the
+//!   spec document, and emit `<module>/<module>.hnl` — `ffi.call` into
+//!   libpython with a JSON env-var value channel. v1 covers
+//!   module-level functions with scalar/`List(T)` signatures; every
+//!   skipped symbol is reported, never dropped.
 
 use handl_plugin_codegen::{
     Change, CodegenEmitterDef, CodegenError, CodegenRegistry, CodegenRequest, CodegenSourceDef,
@@ -23,8 +31,13 @@ use handl_plugin_codegen::{
 };
 use std::collections::HashSet;
 
+mod import;
 mod spec;
 
+pub use import::{
+    IMPORT_FORMAT, INTROSPECT_SCRIPT, ImportFunction, ImportParam, ImportSurface,
+    PythonImportEmitter, PythonImportSource, build_hnl, map_ann, surface_from_document,
+};
 pub use spec::is_python_spec;
 
 /// Register the `python` codegen targets on `reg` (ADR-0128 §0.1/§0.2,
@@ -66,6 +79,26 @@ pub fn register(reg: &mut CodegenRegistry) {
         name: "python-spec",
         source: "python-spec",
         emitter: "python-spec",
+        source_filters: false,
+        docs: None,
+        spec_input: None,
+    });
+    // `python-import` — the read direction: a python module/package
+    // (path, package dir, or dotted name) → `<module>/<module>.hnl`
+    // over embedded CPython. The source probes via subprocess (the
+    // cli backend's `--help` pattern), so `source_filters` stays off.
+    reg.register_source(CodegenSourceDef {
+        name: "python-import",
+        make: import::make_import_source,
+    });
+    reg.register_emitter(CodegenEmitterDef {
+        name: "python-import",
+        make: import::make_import_emitter,
+    });
+    reg.register_target(CodegenTarget {
+        name: "python-import",
+        source: "python-import",
+        emitter: "python-import",
         source_filters: false,
         docs: None,
         spec_input: None,
