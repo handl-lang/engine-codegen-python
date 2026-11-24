@@ -216,7 +216,8 @@ fn hnl_output_has_exports_and_loud_skips() {
     assert!(hnl.contains("from \"json\" import { stringify, parse }"));
     assert!(hnl.contains("PYLIB := \"libpython3.14.so\""));
     assert!(hnl.contains("PyRun_SimpleString"));
-    assert!(hnl.contains("HNL_PY_IN"));
+    assert!(hnl.contains("json.loads(r"));
+    assert!(hnl.contains("_py_args := stringify([a, b])"));
     assert!(hnl.contains("HNL_PY_OUT"));
     assert!(hnl.contains("importlib.util.spec_from_file_location('toy_surface'"));
     assert!(hnl.contains("sys.path.insert(0, _p)"));

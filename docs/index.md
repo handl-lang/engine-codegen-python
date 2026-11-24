@@ -136,11 +136,17 @@ hnl codegen python-import mypkg --output out/        # dotted name, cwd on sys.p
 ```
 
 The emitter writes `<module>/<module>.hnl`: `ffi.call` into
-`libpython` (`Py_Initialize`/`PyRun_SimpleString`), args packed with
-`json.stringify` into `HNL_PY_IN`, the result read from `HNL_PY_OUT`
-through `json.parse`. The recorded `sys.path` entries (and the module's
-own file location, for loose `.py` inputs) are baked into the
-generated dispatcher so the import resolves the same way at runtime.
+`libpython` (`Py_Initialize`/`PyRun_SimpleString`). Args cross **in
+source**: `stringify([args])` is spliced raw into the `py_run` code
+inside a python `r"""…"""` literal (`_a = json.loads(r"""<payload>""")`)
+— no escaping needed and no env-var size cap. The result returns
+through `HNL_PY_OUT`: python's `os.environ[...] =` write does
+`putenv`, which updates the live C environ hnl's `getenv` reads.
+(The reverse direction — hnl `setenv` → python `os.environ` — cannot
+work: CPython snapshots `os.environ` at `Py_Initialize`.) The
+recorded `sys.path` entries (and the module's own file location, for
+loose `.py` inputs) are baked into the generated dispatcher so the
+import resolves the same way at runtime.
 
 **v1 scope** — module-level functions with `int`/`float`/`str`/`bool`
 params and returns plus `list[T]` (`List(T)`); `None` returns degrade
@@ -154,12 +160,7 @@ as required params with a note (hnl signatures have no defaults).
 
 Known channel limits (from the spike + the first live smoke test):
 
-- **CPython's `os.environ` is a snapshot taken at `Py_Initialize`** —
-  `setenv(3)` after init is invisible to the embedded interpreter, so
-  the `HNL_PY_IN`/`HNL_PY_OUT` env channel does not work as generated.
-  The fix is file/pipe transport (or arg-embedding); until then the
-  generated surface typechecks and loads but calls fail inside
-  `py_run`.
-- Env vars cap payload size and are process-global, `Py_Initialize`
-  runs per call, exceptions surface as `PyRun_SimpleString` failure
-  rather than a structured error, and `json.parse` returns `Value`.
+- `Py_Initialize` runs per call, exceptions surface as
+  `PyRun_SimpleString` failure rather than a structured error, and
+  `json.parse` returns `Value` — declared types live in `--` comments,
+  not the typechecker.
