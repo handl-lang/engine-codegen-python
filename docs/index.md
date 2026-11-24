@@ -117,8 +117,12 @@ are `export`ed. The spec path produces `.hnl` directly — no
 ## The `python-import` target (read direction)
 
 `python-import` is the *import* direction the spec path never had:
-it reads a Python module/package and emits a typed `.hnl` surface
-over embedded CPython. The spec argument is a `*.py` file, a package
+it reads a Python module/package and emits a `.hnl` surface over
+embedded CPython. v1 exports are **untyped** (`export f := (a, b) ~>
+do { … }`): the intended signature stays in a `-- f(a: Int, b: Int) ->
+Int` comment — `~[n]~>` signatures describe the extern-call convention
+(array-of-args), not defined arrows, so typed exports need the
+curried `T ~> T ~> R` form (follow-up). The spec argument is a `*.py` file, a package
 directory (with `__init__.py`), or a dotted module name; the source
 probes `python3 -c scripts/hnl-introspect.py <target>` (the vendored,
 stdlib-only introspector — `inspect`/`typing` must run inside Python,
@@ -148,8 +152,14 @@ definitions, C extensions/builtins without annotations, `dict`/
 `codegen: diagnostic:` line on stderr. Python-side defaults are kept
 as required params with a note (hnl signatures have no defaults).
 
-Known channel limits (from the spike, unchanged): env vars cap payload
-size and are process-global, `Py_Initialize` runs per call, exceptions
-surface as `PyRun_SimpleString` failure rather than a structured
-error, and `json.parse` returns `Value` — the declared signature types
-are the intended contract, not yet typechecker-enforced.
+Known channel limits (from the spike + the first live smoke test):
+
+- **CPython's `os.environ` is a snapshot taken at `Py_Initialize`** —
+  `setenv(3)` after init is invisible to the embedded interpreter, so
+  the `HNL_PY_IN`/`HNL_PY_OUT` env channel does not work as generated.
+  The fix is file/pipe transport (or arg-embedding); until then the
+  generated surface typechecks and loads but calls fail inside
+  `py_run`.
+- Env vars cap payload size and are process-global, `Py_Initialize`
+  runs per call, exceptions surface as `PyRun_SimpleString` failure
+  rather than a structured error, and `json.parse` returns `Value`.

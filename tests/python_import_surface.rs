@@ -207,9 +207,9 @@ fn hnl_output_has_exports_and_loud_skips() {
     let hnl = build_hnl(&surface);
 
     // Supported functions export with typed signatures.
-    assert!(hnl.contains("export add: (Int, Int) ~[1]~> Int := (a, b) ~> do {"));
-    assert!(hnl.contains("export scale: (List(Number), Number) ~[1]~> List(Number)"));
-    assert!(hnl.contains("export greet: (String, String) ~[1]~> String"));
+    assert!(hnl.contains("export add := (a, b) ~> do {"));
+    assert!(hnl.contains("export scale := (xs, factor) ~> do {"));
+    assert!(hnl.contains("export greet := (name, punct) ~> do {"));
 
     // ffi plumbing + JSON channel.
     assert!(hnl.contains("from \"ffi\" import { call }"));
@@ -269,7 +269,7 @@ fn emitter_materializes_one_change() {
         &handl_plugin_codegen::ArtifactRef::new("toy_surface/toy_surface.hnl")
     );
     let text = String::from_utf8_lossy(content);
-    assert!(text.contains("export add:"));
+    assert!(text.contains("export add := (a, b) ~> do {"));
 }
 
 // ---------------------------------------------------------------
@@ -329,8 +329,8 @@ fn source_and_emitter_end_to_end() {
 
     // The real introspection must agree with the fixture JSON: the
     // supported set exports, everything else is a SKIPPED comment.
-    assert!(text.contains("export add: (Int, Int) ~[1]~> Int"));
-    assert!(text.contains("export scale: (List(Number), Number)"));
+    assert!(text.contains("export add := (a, b) ~> do {"));
+    assert!(text.contains("export scale := (xs, factor) ~> do {"));
     for name in [
         "total",
         "apply_all",

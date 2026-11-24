@@ -543,11 +543,12 @@ pub fn build_hnl(surface: &ImportSurface) -> String {
     out.push_str("--- results cross as JSON through the HNL_PY_IN / HNL_PY_OUT env vars.\n");
     out.push_str("--- Requires `json.stringify`/`json.parse` (lib-json) for the value\n");
     out.push_str("--- channel. v1: module-level functions, scalar + List(T) signatures;\n");
+    out.push_str("--- exports are untyped (intended types in `--` comments).\n");
     out.push_str("--- skipped symbols are annotated below, never silently dropped.\n");
-    out.push_str("--- NOTE: the value channel is env-var sized (~128 KiB) and the\n");
-    out.push_str("--- declared return types are the *intended* contract — json.parse\n");
-    out.push_str("--- returns Value, so the signature types are not yet enforced by\n");
-    out.push_str("--- the typechecker (spike finding; file/pipe transport is the fix).\n\n");
+    out.push_str("--- NOTE: KNOWN LIMIT — CPython snapshots os.environ at\n");
+    out.push_str("--- Py_Initialize, so the env-var channel cannot see post-init\n");
+    out.push_str("--- setenv; calls currently fail inside py_run until file/pipe\n");
+    out.push_str("--- transport lands.\n\n");
 
     out.push_str("from \"ffi\" import { call }\n");
     out.push_str("from \"json\" import { stringify, parse }\n\n");
@@ -555,7 +556,9 @@ pub fn build_hnl(surface: &ImportSurface) -> String {
     out.push_str(&format!("PYLIB := \"{}\"\n", surface.libpython));
     out.push_str("LIBC := \"libc.so.6\"\n\n");
 
-    out.push_str("py_init := () ~> call(PYLIB, \"Py_Initialize\", [], [], \"void\", false)\n");
+    // `() ~>` nullary arrows misparse when the body is a multi-arg call —
+    // take a dummy param instead (`py_init(null)` at call sites).
+    out.push_str("py_init := (u) ~> call(PYLIB, \"Py_Initialize\", [], [], \"void\", false)\n");
     out.push_str("py_run := (code) ~> call(PYLIB, \"PyRun_SimpleString\", [code], [\"cstr\"], \"i32\", false)\n");
     out.push_str(
         "get_env := (name) ~> call(LIBC, \"getenv\", [name], [\"cstr\"], \"cstr\", false)\n",
@@ -579,10 +582,10 @@ pub fn build_hnl(surface: &ImportSurface) -> String {
             }
         }
 
-        let sig_params = f
+        let py_sig = f
             .params
             .iter()
-            .map(|p| p.hnl.as_str())
+            .map(|p| format!("{}: {}", p.name, p.hnl))
             .collect::<Vec<_>>()
             .join(", ");
         let arg_names = f
@@ -591,29 +594,23 @@ pub fn build_hnl(surface: &ImportSurface) -> String {
             .map(|p| p.name.as_str())
             .collect::<Vec<_>>()
             .join(", ");
-        let py_sig = f
-            .params
-            .iter()
-            .map(|p| p.name.as_str())
-            .collect::<Vec<_>>()
-            .join(", ");
 
         out.push_str(&format!("-- {}({}) -> {}\n", f.py_name, py_sig, f.ret));
-        out.push_str(&format!(
-            "export {}: ({}) ~[1]~> {} := ({}) ~> do {{\n",
-            f.name, sig_params, f.ret, arg_names
-        ));
-        out.push_str("  _ = py_init();\n");
+        // v1 emits an untyped export: `~[n]~>` signatures describe the
+        // extern-call convention (array-of-args), not defined arrows —
+        // the intended types stay in the `-- name(params) -> ret` comment.
+        out.push_str(&format!("export {} := ({}) ~> do {{\n", f.name, arg_names));
+        out.push_str("  _ := py_init(null)\n");
         if f.params.is_empty() {
-            out.push_str("  _ = set_env(\"HNL_PY_IN\", \"[]\");\n");
+            out.push_str("  _ := set_env(\"HNL_PY_IN\", \"[]\")\n");
         } else {
             out.push_str(&format!(
-                "  _ = set_env(\"HNL_PY_IN\", stringify([{}]));\n",
+                "  _ := set_env(\"HNL_PY_IN\", stringify([{}]))\n",
                 arg_names
             ));
         }
         out.push_str(&format!(
-            "  _ = py_run(\"{}\");\n",
+            "  _ := py_run(\"{}\")\n",
             escape_hnl_string(&dispatcher_script(surface, f))
         ));
         out.push_str("  parse(get_env(\"HNL_PY_OUT\"))\n");
