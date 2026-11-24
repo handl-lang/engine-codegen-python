@@ -65,7 +65,7 @@ pub struct PythonImportSource;
 impl Source<SpecModule> for PythonImportSource {
     fn parse(&self, req: &EmitContext) -> Result<SpecModule, CodegenError> {
         let spec = req.spec_path.as_deref().ok_or_else(|| {
-            CodegenError::Parse("python-import source requires EmitContext::spec_path".into())
+            CodegenError::Parse("python-import source requires EmitContext:=spec_path".into())
         })?;
         let python = python_executable(req)?;
         let document = run_introspect(&python, spec)?;
