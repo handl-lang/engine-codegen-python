@@ -11,7 +11,7 @@ Part of the `tool-codegen-*` family.
 cargo xtask gate        # fmt --check → clippy -D warnings → test → doc
 ```
 
-`cargo xtask` wraps the repo's `xtask/` crate; `ci.sh` is the gate entry.
+`cargo xtask` wraps the repo's `xtask/` crate; `workflows/gate.yaml` is the gate entry.
 Deps resolve from git, so no sibling checkouts are needed; a plain clone
 test-runs as-is.
 
